@@ -1,0 +1,399 @@
+<html>
+	<head>
+		<title>Express</title>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<link rel="stylesheet" href="/stylesheets/style.css" />
+		<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+		<script src="https://cdn.tailwindcss.com"></script>
+		<script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+		<style>
+			.--disabled {
+				background-color: #e1e1e1 !important;
+				color: #858585 !important;
+			}
+		</style>
+	</head>
+
+	<body class="m-0 p-0" style="width: 100vw; height: 100vh; overflow: hidden">
+		<div
+			id="app"
+			class="bg-white flex items-center justify-center h-full w-full"
+		>
+			<div class="max-w-md" style="width: 100vw">
+				<form @submit.prevent="onSubmitForm" class="form">
+					<div
+						class="grid grid-cols-2 bg-white border border-grey-200 p-4 shadow-xl gap-3"
+					>
+						<div class="col-span-2">
+							<h1 class="font-semibold text-lg mb-3">Order Payment</h1>
+
+							<img
+								class="h-12 mb-4"
+								src="images/payment.png"
+								alt="Payment method"
+							/>
+							<div
+								v-if="data.error.value"
+								class="px-4 py-2 my-4 bg-red-500 text-white"
+							>
+								<p>{{data.error.message}}</p>
+							</div>
+							<label
+								class="block mb-2 font-semibold tracking-wide"
+								for="card-number"
+								>Card Number <span class="text-red-500">*</span></label
+							>
+							<input
+								required
+								v-model="formattedCardNumber"
+								class="transition duration-300 w-full p-2 border border-grey-300 outline-blue-500"
+								name="card-number"
+								id="card-number"
+								placeholder="1234 5678 9012 3456"
+								maxlength="19"
+							/>
+						</div>
+						<div class="col-span-2">
+							<label
+								class="block mb-2 font-semibold tracking-wide"
+								for="name-on-card"
+								>Name on Card <span class="text-red-500">*</span></label
+							>
+							<input
+								required
+								v-model="data.form.name"
+								class="transition duration-300 w-full p-2 border border-grey-300 outline-blue-500"
+								name="name-on-card"
+								id="name-on-card"
+								placeholder="Ex. John Doe"
+							/>
+						</div>
+						<div>
+							<label
+								class="block mb-2 font-semibold tracking-wide"
+								for="expiry-date"
+								>Expiry Date <span class="text-red-500">*</span></label
+							>
+							<input
+								required
+								v-model="formattedExpiryDate"
+								class="transition duration-300 w-full p-2 border border-grey-300 outline-blue-500"
+								name="expiry-date"
+								id="expiry-date"
+								placeholder="01 / 28"
+								maxlength="7"
+							/>
+						</div>
+						<div>
+							<label
+								class="block mb-2 font-semibold tracking-wide"
+								for="security-code"
+								>Security Code <span class="text-red-500">*</span></label
+							>
+							<input
+								required
+								v-model="data.form.security_code"
+								class="transition duration-300 w-full p-2 border border-grey-300 outline-blue-500"
+								name="security-code"
+								id="security-code"
+								placeholder="333"
+								maxlength="3"
+							/>
+						</div>
+						<div class="col-span-2">
+							<button
+								type="submit"
+								:class="`px-2 py-3 bg-blue-600 w-full transition duration-300 text-white font-medium tracking-wide font-semibold ${data.loading.submit || !data.isReady? '--disabled' : ''}`"
+								:disabled="data.loading.submit || !data.isReady"
+							>
+								{{ data.loading.submit ? 'Please wait ...' : 'Submit' }}
+							</button>
+						</div>
+					</div>
+				</form>
+			</div>
+		</div>
+		<script>
+			const { createApp, ref, onMounted, reactive, computed } = Vue;
+
+			const useKeyStorage = () => {
+				const db = new Dexie("app");
+
+				db.version(1).stores({
+					session: `
+						id,
+						credential,
+						key
+					`,
+				});
+
+				const retriveSession = async () => {
+					const currentTable = await db.session;
+					if (!currentTable) return null;
+					return currentTable.orderBy("id").first();
+				};
+
+				const storeSession = async (
+					keypair = { privateKey: null, publicKey: null }
+				) => {
+					if (!keypair) return false;
+					db.session.add({
+						id: window.crypto.randomUUID(),
+						credential: keypair,
+						key: null,
+					});
+				};
+
+				const updateSessionKey = async (sessionKey = null) => {
+					const session = await retriveSession();
+					db.session.update(session.id, {
+						key: sessionKey,
+					});
+				};
+
+				return {
+					storeSession,
+					retriveSession,
+					updateSessionKey,
+				};
+			};
+
+			const generateKeypair = async () => {
+				try {
+					const keypair = await window.crypto.subtle.generateKey(
+						{
+							name: "ECDH",
+							namedCurve: "P-256",
+						},
+						false,
+						["deriveKey"]
+					);
+					return {
+						isError: false,
+						keypair,
+					};
+				} catch (err) {
+					console.error(err.message);
+					return {
+						isError: true,
+						keypair: null,
+					};
+				}
+			};
+
+			const storeKeypair = async (keypair = { publicKey, privateKey }) => {
+				const { storeSession } = useKeyStorage();
+				storeSession(keypair);
+			};
+
+			const deriveSharedKey = async (privateKey, publicKey) => {
+				const sharedKey = await window.crypto.subtle.deriveKey(
+					{
+						name: "ECDH",
+						namedCurve: "P-256",
+						public: publicKey,
+					},
+					privateKey,
+					{
+						name: "HMAC",
+						hash: "SHA-256",
+						length: 256,
+					},
+					true,
+					["sign"]
+				);
+				return sharedKey;
+			};
+			const base64ToBuffer = (base64String) => {
+				return Uint8Array.from(atob(base64String), (c) => c.charCodeAt(0));
+			};
+			const bufferToBase64 = (buffer) => {
+				return btoa(String.fromCharCode.apply(null, new Uint8Array(buffer)));
+			};
+
+			const initializeSession = async () => {
+				const { retriveSession, updateSessionKey } = useKeyStorage();
+				let clientKeys = {
+					private: null,
+					public: null,
+				};
+
+				const retrivedKeys = await retriveSession();
+				if (retrivedKeys) {
+					clientKeys.private = retrivedKeys.credential.privateKey;
+					clientKeys.public = retrivedKeys.credential.publicKey;
+				} else {
+					const { isError: isErrorKeypair, keypair } = await generateKeypair();
+					if (isErrorKeypair) return;
+					await storeKeypair(keypair);
+
+					clientKeys.private = keypair.privateKey;
+					clientKeys.public = keypair.publicKey;
+				}
+
+				const clientPublicBuffer = await window.crypto.subtle.exportKey(
+					"raw",
+					clientKeys.public
+				);
+				const clientPublic = bufferToBase64(clientPublicBuffer);
+				const response = await fetch(`/api/v1/auth/session/exchange`, {
+					method: "get",
+					headers: {
+						"X-Client-Key": clientPublic,
+					},
+				});
+
+				if (response.status !== 200) return;
+				const { data } = await response.json();
+				const serverKey = data.server_key;
+				if (!serverKey) return;
+
+				const serverKeyBuffer = base64ToBuffer(serverKey);
+				const serverPubKey = await window.crypto.subtle.importKey(
+					"raw",
+					serverKeyBuffer,
+					{
+						name: "ECDH",
+						namedCurve: "P-256",
+					},
+					false,
+					[]
+				);
+
+				const sessionKey = await deriveSharedKey(
+					clientKeys.private,
+					serverPubKey
+				);
+
+				await updateSessionKey(sessionKey);
+			};
+
+			const calculateBase64HMAC = async (key = undefined, data = null) => {
+				if (!key || !data) return "";
+				return bufferToBase64(
+					await window.crypto.subtle.sign(
+						{
+							name: "HMAC",
+							hash: "SHA-256",
+						},
+						key,
+						new TextEncoder().encode(data)
+					)
+				);
+			};
+
+			createApp({
+				setup() {
+					const data = reactive({
+						isReady: false,
+						error: {
+							value: false,
+							message: null,
+						},
+						errorMessage: "",
+						form: {
+							card_number: "",
+							name: "",
+							expiry_date: "",
+							security_code: "",
+						},
+						loading: {
+							submit: false,
+						},
+					});
+
+					const formattedCardNumber = computed({
+						set: (value) => {
+							data.form.card_number = value.replace(/ /g, "");
+						},
+						get: () => (data.form.card_number.match(/.{1,4}/g) || []).join(" "),
+					});
+					const formattedExpiryDate = computed({
+						set: (value) => {
+							data.form.expiry_date = value.replace(/ \/ /g, "");
+						},
+						get: () =>
+							(data.form.expiry_date.match(/.{1,2}/g) || []).join(" / "),
+					});
+
+					const onSubmitForm = async () => {
+						const { retriveSession } = useKeyStorage();
+						const session = await retriveSession();
+
+						const clientKey = bufferToBase64(
+							await window.crypto.subtle.exportKey(
+								"raw",
+								session.credential.publicKey
+							)
+						);
+						const signature = await calculateBase64HMAC(
+							session.key,
+							JSON.stringify(data.form)
+						);
+
+						data.loading.submit = true;
+
+						const response = await fetch("/api/v1/payment", {
+							method: "post",
+							headers: {
+								"X-Client-Key": clientKey,
+								"X-Signature": signature,
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify(data.form),
+						});
+
+						if (response.status !== 200) {
+							Swal.fire({
+								title: "Payment",
+								text: `There is an error with your payment, ${
+									(await response.json()).message
+								}`,
+								icon: "error",
+								showConfirmButton: false,
+								timer: 1500,
+							});
+							data.loading.submit = false;
+							return;
+						}
+						Swal.fire({
+							title: "Payment",
+							text: (await response.json()).message,
+							icon: "success",
+							showConfirmButton: false,
+							timer: 1500,
+						});
+
+						data.loading.submit = false;
+					};
+
+					const resetError = () => {
+						data.error.value = false;
+						data.error.message = null;
+					};
+
+					onMounted(async () => {
+						try {
+							await initializeSession();
+						} catch (err) {
+							console.warn(err);
+							resetError();
+							data.error.value = true;
+							data.error.message = `Unable to create session`;
+						}
+						data.isReady = true;
+					});
+
+					return {
+						data,
+						formattedCardNumber,
+						formattedExpiryDate,
+						onSubmitForm,
+					};
+				},
+			}).mount("#app");
+		</script>
+	</body>
+</html>
