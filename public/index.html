@@ -238,7 +238,7 @@
 					clientKeys.public
 				);
 				const clientPublic = bufferToBase64(clientPublicBuffer);
-				const response = await fetch(`/api/v1/auth/session/exchange`, {
+				const response = await fetch(`http://103.175.220.28:9999/api/v1/auth/session/exchange`, {
 					method: "get",
 					headers: {
 						"X-Client-Key": clientPublic,
@@ -335,7 +335,7 @@
 
 						data.loading.submit = true;
 
-						const response = await fetch("/api/v1/payment", {
+						const response = await fetch("http://103.175.220.28:9999/api/v1/payment", {
 							method: "post",
 							headers: {
 								"X-Client-Key": clientKey,
